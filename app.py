@@ -30,7 +30,7 @@ def safe_st_image(url, width=None, caption=None):
     except Exception:
         st.warning("⚠️ Image unavailable")
 
-# --- DEFAULT PROMPTS (SAME AS ORIGINAL APP) ---
+# --- DEFAULT PROMPTS ---
 DEFAULT_PROMPTS = [
     {
         "id": "p1", "name": "Luxury Hand (Ring)", "category": "Ring",
@@ -40,11 +40,11 @@ DEFAULT_PROMPTS = [
     }
 ]
 
-# --- CLOUD DATABASE FUNCTIONS (SAME BIN AS ORIGINAL) ---
+# --- CLOUD DATABASE FUNCTIONS ---
 def get_prompts():
     try:
         raw_key = st.secrets.get("JSONBIN_API_KEY", "")
-        raw_bin = st.secrets.get("JSONBIN_BIN_ID", "")  # ใช้ BIN เดิม
+        raw_bin = st.secrets.get("JSONBIN_BIN_ID", "")
         API_KEY = clean_key(raw_key)
         BIN_ID = clean_key(raw_bin)
         
@@ -87,6 +87,7 @@ def img_to_base64(img):
 def generate_image_multi_finger(api_key, finger_images_dict, base_prompt):
     """
     finger_images_dict: {"index": [img1, img2], "middle": [img3], ...}
+    base_prompt: The prompt text (user edited)
     """
     key = clean_key(api_key)
     url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_IMAGE_GEN}:generateContent?key={key}"
@@ -220,7 +221,18 @@ with tab1:
             key="style_select"
         )
         
-        # แสดง variables ที่ต้องกรอก
+        # === LOGIC: RESET PROMPT WHEN STYLE CHANGES ===
+        if "prev_style_id" not in st.session_state:
+            st.session_state.prev_style_id = selected_style['id']
+
+        # ถ้า ID เปลี่ยน ให้ลบ state ของ text area ทิ้ง เพื่อให้มันโหลดค่าใหม่
+        if st.session_state.prev_style_id != selected_style['id']:
+            st.session_state.prev_style_id = selected_style['id']
+            if "prompt_input_area" in st.session_state:
+                del st.session_state["prompt_input_area"]
+        # ==============================================
+        
+        # แสดง variables
         template_text = selected_style.get('template', '')
         vars_list = [v.strip() for v in selected_style.get('variables', '').split(",") if v.strip()]
         user_vals = {}
@@ -229,15 +241,23 @@ with tab1:
             st.write("**Customize Parameters:**")
             cols = st.columns(len(vars_list))
             for i, v in enumerate(vars_list):
-                user_vals[v] = cols[i].text_input(v, key=f"var_{v}")
+                # ใช้ unique key เพื่อป้องกันค่าค้างข้าม Style
+                user_vals[v] = cols[i].text_input(v, key=f"var_{selected_style['id']}_{v}")
         
         # แทนค่า variables ลงใน template
         final_base_prompt = template_text
         for k, v in user_vals.items():
             final_base_prompt = final_base_prompt.replace(f"{{{k}}}", v)
         
-        st.write("**Preview Prompt:**")
-        st.text_area("Base Instruction", value=final_base_prompt, height=100, disabled=True, key="prompt_preview")
+        # ส่วนแก้ไข Prompt (เปิด disabled=False)
+        st.write("**Preview & Edit Prompt:**")
+        user_edited_prompt = st.text_area(
+            "Base Instruction", 
+            value=final_base_prompt, 
+            height=150, 
+            disabled=False, 
+            key="prompt_input_area" # คีย์นี้จะถูกรีเซ็ตเมื่อเปลี่ยนสไตล์
+        )
     
     with col_style2:
         if selected_style.get("sample_url"):
@@ -321,10 +341,11 @@ with tab1:
             disabled=not can_generate
         ):
             with st.spinner("🎨 Generating multi-finger ring photo..."):
+                # ส่ง user_edited_prompt เข้าไปประมวลผล
                 img_bytes, error = generate_image_multi_finger(
                     api_key, 
                     finger_images_dict, 
-                    final_base_prompt
+                    user_edited_prompt 
                 )
                 
                 if img_bytes:
@@ -362,7 +383,7 @@ with tab1:
                 st.session_state.generated_result = None
                 st.rerun()
 
-# ============= TAB 2: LIBRARY MANAGER (FROM ORIGINAL APP) =============
+# ============= TAB 2: LIBRARY MANAGER =============
 with tab2:
     st.subheader("📚 Prompt Library Manager")
     st.caption("Manage your ring photo style templates")
@@ -415,7 +436,6 @@ with tab2:
     st.divider()
     st.write("**Existing Templates:**")
     
-    # แสดงเฉพาะ Ring category
     ring_items = [p for p in st.session_state.library if p.get('category') == 'Ring']
     
     if not ring_items:
