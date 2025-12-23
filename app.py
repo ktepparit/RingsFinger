@@ -87,7 +87,6 @@ def img_to_base64(img):
 def generate_image_multi_finger(api_key, finger_images_dict, base_prompt):
     """
     finger_images_dict: {"index": [img1, img2], "middle": [img3], ...}
-    base_prompt: The prompt text (user edited)
     """
     key = clean_key(api_key)
     url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_IMAGE_GEN}:generateContent?key={key}"
@@ -237,15 +236,8 @@ with tab1:
         for k, v in user_vals.items():
             final_base_prompt = final_base_prompt.replace(f"{{{k}}}", v)
         
-        # --- [MODIFIED] ENABLE EDITING ---
-        st.write("**Preview & Edit Prompt:**")
-        user_edited_prompt = st.text_area(
-            "Base Instruction", 
-            value=final_base_prompt, 
-            height=150, 
-            disabled=False, 
-            key="prompt_input_area"
-        )
+        st.write("**Preview Prompt:**")
+        st.text_area("Base Instruction", value=final_base_prompt, height=100, disabled=True, key="prompt_preview")
     
     with col_style2:
         if selected_style.get("sample_url"):
@@ -329,11 +321,10 @@ with tab1:
             disabled=not can_generate
         ):
             with st.spinner("🎨 Generating multi-finger ring photo..."):
-                # --- [MODIFIED] USE EDITED PROMPT ---
                 img_bytes, error = generate_image_multi_finger(
                     api_key, 
                     finger_images_dict, 
-                    user_edited_prompt  # Pass the edited prompt here
+                    final_base_prompt
                 )
                 
                 if img_bytes:
