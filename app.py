@@ -83,7 +83,7 @@ def img_to_base64(img):
     img.save(buf, format="JPEG", quality=90)
     return base64.b64encode(buf.getvalue()).decode()
 
-# --- AI FUNCTION (GEMINI) - BATCH ALL FINGERS ---
+# --- AI FUNCTION (GEMINI) - BATCH ALL FINGERS (FIXED PLACEMENT LOGIC) ---
 def generate_image_multi_finger(api_key, finger_images_dict, base_prompt):
     """
     finger_images_dict: {"index": [img1, img2], "middle": [img3], ...}
@@ -92,55 +92,66 @@ def generate_image_multi_finger(api_key, finger_images_dict, base_prompt):
     key = clean_key(api_key)
     url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_IMAGE_GEN}:generateContent?key={key}"
     
-    # สร้าง instruction ที่บอกว่าแต่ละนิ้วใส่แหวนอะไร
+    # ใช้ชื่อทางกายวิภาคที่ชัดเจน
     finger_names = {
-        "index": "index finger",
-        "middle": "middle finger", 
-        "ring": "ring finger",
-        "little": "little finger"
+        "index": "Index Finger (the finger next to the thumb)",
+        "middle": "Middle Finger (the center finger)", 
+        "ring": "Ring Finger (the finger between middle and little)",
+        "little": "Little Finger (the smallest finger, pinky)"
     }
     
     finger_instructions = []
     image_counter = 1
+    rings_count = 0
     
-    for finger_key in ["index", "middle", "ring", "little"]:
+    # ลำดับการวนลูปสำคัญมาก ต้องตรงกันทั้งการสร้าง Text และการแนบรูป
+    ordered_keys = ["index", "middle", "ring", "little"]
+    
+    for finger_key in ordered_keys:
         if finger_key in finger_images_dict and finger_images_dict[finger_key]:
             num_imgs = len(finger_images_dict[finger_key])
+            rings_count += 1
             if num_imgs == 1:
-                finger_instructions.append(f"- {finger_names[finger_key]}: wearing the ring shown in image #{image_counter}")
+                finger_instructions.append(f"- {finger_names[finger_key]}: MUST wear the ring shown in reference image #{image_counter}")
                 image_counter += 1
             else:
-                img_range = f"images #{image_counter}-{image_counter + num_imgs - 1}"
-                finger_instructions.append(f"- {finger_names[finger_key]}: wearing the ring shown in {img_range}")
+                img_range = f"reference images #{image_counter}-{image_counter + num_imgs - 1}"
+                finger_instructions.append(f"- {finger_names[finger_key]}: MUST wear the ring combination shown in {img_range}")
                 image_counter += num_imgs
     
     instruction_text = "\n".join(finger_instructions)
     
+    # --- UPDATED PROMPT TO BE MORE STRICT ---
     full_prompt = f"""{base_prompt}
 
-IMPORTANT RING PLACEMENT:
+TASK: Generate a professional photograph of a single human hand wearing exactly {rings_count} rings.
+
+STRICT MANDATORY RING PLACEMENT (Follow Exactly):
 {instruction_text}
 
-Constraints:
-- Show ONE hand with all specified rings worn on their designated fingers
-- Keep each ring design EXACTLY as shown in the reference images (same shape, gemstones, texture)
-- Only improve lighting, hand pose, background, and photography quality
-- Do not hallucinate or modify ring details"""
+CRITICAL CONSTRAINTS:
+1.  **ANATOMICAL CORRECTNESS IS PARAMOUNT.** Place each ring precisely on the named finger in the instructions above.
+2.  **DO NOT SHIFT RINGS.** Do not place a ring intended for one finger onto an adjacent finger (e.g., do not put the Middle Finger ring on the Ring Finger).
+3.  **REFERENCE ACCURACY.** Keep each ring's design, gemstones, and metal texture EXACTLY as shown in its corresponding reference image(s).
+4.  Show only ONE hand in the final image.
+5.  Ensure lighting and pose highlight all {rings_count} rings clearly.
+"""
 
-    # สร้าง parts: text + images ตามลำดับ
+    # สร้าง parts: text + images ตามลำดับที่แน่นอน
     parts = [{"text": full_prompt}]
     
-    for finger_key in ["index", "middle", "ring", "little"]:
+    for finger_key in ordered_keys:
         if finger_key in finger_images_dict:
             for img in finger_images_dict[finger_key]:
                 parts.append({"inline_data": {"mime_type": "image/jpeg", "data": img_to_base64(img)}})
     
     try:
+        # เพิ่ม temperature เล็กน้อยเพื่อให้โมเดลพยายามทำตาม instruction มากขึ้น
         res = requests.post(
             url, 
             json={
                 "contents": [{"parts": parts}], 
-                "generationConfig": {"temperature": 0.3}
+                "generationConfig": {"temperature": 0.2} 
             }, 
             headers={"Content-Type": "application/json"},
             timeout=60
@@ -239,11 +250,10 @@ with tab1:
         for k, v in user_vals.items():
             final_base_prompt = final_base_prompt.replace(f"{{{k}}}", v)
         
-        # 4. แสดงช่อง Base Instruction (ใช้ Dynamic Key แก้ปัญหาข้อความไม่เปลี่ยน)
+        # 4. แสดงช่อง Base Instruction
         st.write("**Preview & Edit Prompt:**")
         
-        # --- KEY FIX IS HERE ---
-        # การใส่ ID ลงไปใน key จะทำให้ Streamlit สร้าง widget ใหม่ทุกครั้งที่เปลี่ยน Style
+        # ใช้ ID ของ Style มาเป็นส่วนหนึ่งของ Key เพื่อให้รีเซ็ตค่าเมื่อเปลี่ยน Style
         prompt_key = f"edit_prompt_area_{selected_style['id']}"
         
         user_edited_prompt = st.text_area(
@@ -334,7 +344,7 @@ with tab1:
             use_container_width=True,
             disabled=not can_generate
         ):
-            with st.spinner("🎨 Generating multi-finger ring photo..."):
+            with st.spinner("🎨 Generating multi-finger ring photo... (This may take a minute)"):
                 # ส่งค่า user_edited_prompt (ที่แก้ไขแล้ว) ไปยังฟังก์ชัน AI
                 img_bytes, error = generate_image_multi_finger(
                     api_key, 
