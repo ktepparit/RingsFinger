@@ -10,15 +10,23 @@ import re
 # --- 1. CONFIGURATION (ต้องอยู่บรรทัดแรกสุดหลัง import) ---
 st.set_page_config(layout="wide", page_title="Ring AI Generator - Multi Finger")
 
-# --- 2. ฟังก์ชันตรวจสอบรหัสผ่าน ---
+# --- 2. ฟังก์ชันตรวจสอบรหัสผ่าน (ฉบับแก้ไข: กัน Error จอดำ) ---
 def check_password():
     """Returns `True` if the user had the correct password."""
 
+    # 1. เช็คก่อนเลยว่าตั้งค่า Secrets หรือยัง?
+    if "my_app_password" not in st.secrets:
+        st.error("❌ ยังไม่ได้ตั้งค่ารหัสผ่าน! กรุณาไปที่ Manage App > Settings > Secrets แล้วเพิ่ม: my_app_password = '...'", icon="⚠️")
+        st.stop() # หยุดการทำงานตรงนี้ ไม่ให้ Error
+
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == st.secrets["my_app_password"]:
+        # ใช้ .get เพื่อกัน error กรณี key หาย
+        if st.session_state["password"] == st.secrets.get("my_app_password"):
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # ลบรหัสจากช่องกรอกเพื่อความสะอาด
+            # ลบรหัสจากช่องกรอกเพื่อความสะอาด (ต้องเช็คก่อนลบ)
+            if "password" in st.session_state:
+                del st.session_state["password"]  
         else:
             st.session_state["password_correct"] = False
 
