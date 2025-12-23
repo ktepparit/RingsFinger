@@ -7,7 +7,10 @@ from PIL import Image
 import time
 import re
 
-# ฟังก์ชันตรวจสอบรหัสผ่าน
+# --- 1. CONFIGURATION (ต้องอยู่บรรทัดแรกสุดหลัง import) ---
+st.set_page_config(layout="wide", page_title="Ring AI Generator - Multi Finger")
+
+# --- 2. ฟังก์ชันตรวจสอบรหัสผ่าน ---
 def check_password():
     """Returns `True` if the user had the correct password."""
 
@@ -39,14 +42,12 @@ def check_password():
         st.error("😕 รหัสผ่านไม่ถูกต้อง")
         return False
 
-# --- ส่วนเริ่มทำงานของแอพ ---
-if check_password():
-    # *** ใส่โค้ดแอพปกติของคุณทั้งหมดไว้ตรงนี้ หรือต่อจากตรงนี้ ***
-    st.write("ยินดีต้อนรับ! นี่คือแอพส่วนตัวของฉัน")
-    # ... โค้ดส่วนอื่นๆ ...
+# --- 3. ส่วนเริ่มทำงานของแอพ (Logic สำคัญ) ---
+if not check_password():
+    st.stop()  # <--- สำคัญมาก! ถ้าไม่ผ่านรหัสผ่าน ให้หยุดโหลดแอพทันที (คนอื่นจะไม่เห็นหน้า UI ข้างล่าง)
 
-# --- CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="Ring AI Generator - Multi Finger")
+# *** ถ้าผ่านรหัสมาได้ โค้ดด้านล่างนี้ถึงจะทำงาน ***
+st.toast("ยินดีต้อนรับ! เข้าสู่ระบบสำเร็จ", icon="✅")
 
 # Model ID
 MODEL_IMAGE_GEN = "models/gemini-3-pro-image-preview"
@@ -71,13 +72,10 @@ def safe_st_image(url, width=None, caption=None):
 # --- HELPER: RESET STATE FUNCTION (NEW) ---
 def reset_app_state():
     """ฟังก์ชันสำหรับล้างค่าทั้งหมดใน Form"""
-    # 1. ล้างรูปผลลัพธ์
     st.session_state.generated_result = None
     
-    # 2. ล้างค่าใน Session State ที่เป็น Input ต่างๆ
     keys_to_clear = []
     for key in st.session_state.keys():
-        # ล้าง key ของ file uploader, variables, และ prompt text area
         if (key.startswith("upload_") or 
             key.startswith("var_") or 
             key.startswith("edit_prompt_") or
@@ -86,8 +84,6 @@ def reset_app_state():
             
     for key in keys_to_clear:
         del st.session_state[key]
-    
-    # ไม่ต้อง st.rerun() ที่นี่ เพราะปุ่มจะ trigger rerun ให้อัตโนมัติ
 
 # --- DEFAULT PROMPTS ---
 DEFAULT_PROMPTS = [
@@ -181,9 +177,9 @@ STRICT MANDATORY RING PLACEMENT (Follow Exactly):
 {instruction_text}
 
 CRITICAL CONSTRAINTS:
-1.  **ANATOMICAL CORRECTNESS IS PARAMOUNT.** Place each ring precisely on the named finger in the instructions above.
-2.  **DO NOT SHIFT RINGS.** Do not place a ring intended for one finger onto an adjacent finger (e.g., do not put the Middle Finger ring on the Ring Finger).
-3.  **REFERENCE ACCURACY.** Keep each ring's design, gemstones, and metal texture EXACTLY as shown in its corresponding reference image(s).
+1.  ANATOMICAL CORRECTNESS IS PARAMOUNT. Place each ring precisely on the named finger in the instructions above.
+2.  DO NOT SHIFT RINGS. Do not place a ring intended for one finger onto an adjacent finger.
+3.  REFERENCE ACCURACY. Keep each ring's design, gemstones, and metal texture EXACTLY as shown in its corresponding reference image(s).
 4.  Show only ONE hand in the final image.
 5.  Ensure lighting and pose highlight all {rings_count} rings clearly.
 """
@@ -338,7 +334,6 @@ with tab1:
             with st.container(border=True):
                 st.markdown(f"### {emoji} {finger_name}")
                 
-                # สังเกต key ตรงนี้ ต้องตรงกับที่ reset_app_state() สั่งลบ
                 uploaded_files = st.file_uploader(
                     "Upload ring reference(s)",
                     accept_multiple_files=True,
@@ -378,7 +373,7 @@ with tab1:
     with col_btn:
         can_generate = bool(finger_images_dict) and bool(api_key)
         
-        # ปุ่ม GENERATE (สีหลัก)
+        # ปุ่ม GENERATE
         if st.button(
             "🚀 GENERATE PHOTO", 
             type="primary", 
@@ -399,10 +394,8 @@ with tab1:
                 else:
                     st.error(f"❌ Generation failed: {error}")
         
-        # --- NEW: ปุ่ม RESET FORM ---
-        # ใช้ on_click เพื่อเรียกฟังก์ชันล้างค่าก่อนหน้าเว็บจะโหลดใหม่
+        # ปุ่ม RESET
         if st.button("🔄 Reset / Clear All", use_container_width=True, on_click=reset_app_state):
-            # ไม่ต้องใส่ logic ตรงนี้ เพราะ on_click ทำงานไปแล้ว
             pass
     
     # --- DISPLAY RESULT ---
