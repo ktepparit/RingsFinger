@@ -7,6 +7,44 @@ from PIL import Image
 import time
 import re
 
+# ฟังก์ชันตรวจสอบรหัสผ่าน
+def check_password():
+    """Returns `True` if the user had the correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == st.secrets["my_app_password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # ลบรหัสจากช่องกรอกเพื่อความสะอาด
+        else:
+            st.session_state["password_correct"] = False
+
+    # ถ้ายังไม่ได้ยืนยันรหัสผ่าน
+    if "password_correct" not in st.session_state:
+        # แสดงช่องกรอกรหัสผ่าน
+        st.text_input(
+            "กรุณาใส่รหัสผ่านเพื่อใช้งาน", type="password", on_change=password_entered, key="password"
+        )
+        return False
+    
+    # ถ้ายืนยันแล้วถูกต้อง
+    elif st.session_state["password_correct"]:
+        return True
+    
+    # ถ้าใส่ผิด
+    else:
+        st.text_input(
+            "กรุณาใส่รหัสผ่านเพื่อใช้งาน", type="password", on_change=password_entered, key="password"
+        )
+        st.error("😕 รหัสผ่านไม่ถูกต้อง")
+        return False
+
+# --- ส่วนเริ่มทำงานของแอพ ---
+if check_password():
+    # *** ใส่โค้ดแอพปกติของคุณทั้งหมดไว้ตรงนี้ หรือต่อจากตรงนี้ ***
+    st.write("ยินดีต้อนรับ! นี่คือแอพส่วนตัวของฉัน")
+    # ... โค้ดส่วนอื่นๆ ...
+
 # --- CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Ring AI Generator - Multi Finger")
 
