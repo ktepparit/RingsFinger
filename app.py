@@ -30,6 +30,27 @@ def safe_st_image(url, width=None, caption=None):
     except Exception:
         st.warning("⚠️ Image unavailable")
 
+# --- HELPER: RESET STATE FUNCTION (NEW) ---
+def reset_app_state():
+    """ฟังก์ชันสำหรับล้างค่าทั้งหมดใน Form"""
+    # 1. ล้างรูปผลลัพธ์
+    st.session_state.generated_result = None
+    
+    # 2. ล้างค่าใน Session State ที่เป็น Input ต่างๆ
+    keys_to_clear = []
+    for key in st.session_state.keys():
+        # ล้าง key ของ file uploader, variables, และ prompt text area
+        if (key.startswith("upload_") or 
+            key.startswith("var_") or 
+            key.startswith("edit_prompt_") or
+            key == "prev_style_id"):
+            keys_to_clear.append(key)
+            
+    for key in keys_to_clear:
+        del st.session_state[key]
+    
+    # ไม่ต้อง st.rerun() ที่นี่ เพราะปุ่มจะ trigger rerun ให้อัตโนมัติ
+
 # --- DEFAULT PROMPTS ---
 DEFAULT_PROMPTS = [
     {
@@ -83,16 +104,11 @@ def img_to_base64(img):
     img.save(buf, format="JPEG", quality=90)
     return base64.b64encode(buf.getvalue()).decode()
 
-# --- AI FUNCTION (GEMINI) - BATCH ALL FINGERS (FIXED PLACEMENT LOGIC) ---
+# --- AI FUNCTION (GEMINI) - BATCH ALL FINGERS ---
 def generate_image_multi_finger(api_key, finger_images_dict, base_prompt):
-    """
-    finger_images_dict: {"index": [img1, img2], "middle": [img3], ...}
-    base_prompt: The prompt text (user edited)
-    """
     key = clean_key(api_key)
     url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_IMAGE_GEN}:generateContent?key={key}"
     
-    # ใช้ชื่อทางกายวิภาคที่ชัดเจน
     finger_names = {
         "index": "Index Finger (the finger next to the thumb)",
         "middle": "Middle Finger (the center finger)", 
@@ -103,8 +119,6 @@ def generate_image_multi_finger(api_key, finger_images_dict, base_prompt):
     finger_instructions = []
     image_counter = 1
     rings_count = 0
-    
-    # ลำดับการวนลูปสำคัญมาก ต้องตรงกันทั้งการสร้าง Text และการแนบรูป
     ordered_keys = ["index", "middle", "ring", "little"]
     
     for finger_key in ordered_keys:
@@ -121,7 +135,6 @@ def generate_image_multi_finger(api_key, finger_images_dict, base_prompt):
     
     instruction_text = "\n".join(finger_instructions)
     
-    # --- UPDATED PROMPT TO BE MORE STRICT ---
     full_prompt = f"""{base_prompt}
 
 TASK: Generate a professional photograph of a single human hand wearing exactly {rings_count} rings.
@@ -137,7 +150,6 @@ CRITICAL CONSTRAINTS:
 5.  Ensure lighting and pose highlight all {rings_count} rings clearly.
 """
 
-    # สร้าง parts: text + images ตามลำดับที่แน่นอน
     parts = [{"text": full_prompt}]
     
     for finger_key in ordered_keys:
@@ -146,7 +158,6 @@ CRITICAL CONSTRAINTS:
                 parts.append({"inline_data": {"mime_type": "image/jpeg", "data": img_to_base64(img)}})
     
     try:
-        # เพิ่ม temperature เล็กน้อยเพื่อให้โมเดลพยายามทำตาม instruction มากขึ้น
         res = requests.post(
             url, 
             json={
@@ -225,7 +236,6 @@ with tab1:
     col_style1, col_style2 = st.columns([2, 1])
     
     with col_style1:
-        # 1. Select Box
         selected_style = st.selectbox(
             "Choose Ring Style", 
             ring_prompts, 
@@ -233,7 +243,6 @@ with tab1:
             key="style_select"
         )
         
-        # 2. Variable Inputs
         template_text = selected_style.get('template', '')
         vars_list = [v.strip() for v in selected_style.get('variables', '').split(",") if v.strip()]
         user_vals = {}
@@ -242,20 +251,14 @@ with tab1:
             st.write("**Customize Parameters:**")
             cols = st.columns(len(vars_list))
             for i, v in enumerate(vars_list):
-                # ใช้ Dynamic Key เพื่อความเสถียรของ UI
                 user_vals[v] = cols[i].text_input(v, key=f"var_{selected_style['id']}_{v}")
         
-        # 3. สร้างข้อความ Prompt
         final_base_prompt = template_text
         for k, v in user_vals.items():
             final_base_prompt = final_base_prompt.replace(f"{{{k}}}", v)
         
-        # 4. แสดงช่อง Base Instruction
         st.write("**Preview & Edit Prompt:**")
-        
-        # ใช้ ID ของ Style มาเป็นส่วนหนึ่งของ Key เพื่อให้รีเซ็ตค่าเมื่อเปลี่ยน Style
         prompt_key = f"edit_prompt_area_{selected_style['id']}"
-        
         user_edited_prompt = st.text_area(
             "Base Instruction", 
             value=final_base_prompt, 
@@ -282,7 +285,6 @@ with tab1:
         {"key": "little", "name": "Little Finger", "emoji": "🤙"}
     ]
     
-    # Layout: 2x2 grid
     row1_col1, row1_col2 = st.columns(2)
     row2_col1, row2_col2 = st.columns(2)
     columns_layout = [row1_col1, row1_col2, row2_col1, row2_col2]
@@ -298,18 +300,18 @@ with tab1:
             with st.container(border=True):
                 st.markdown(f"### {emoji} {finger_name}")
                 
+                # สังเกต key ตรงนี้ ต้องตรงกับที่ reset_app_state() สั่งลบ
                 uploaded_files = st.file_uploader(
                     "Upload ring reference(s)",
                     accept_multiple_files=True,
                     type=["jpg", "png"],
-                    key=f"upload_{finger_key}",
+                    key=f"upload_{finger_key}", 
                     label_visibility="collapsed"
                 )
                 
                 if uploaded_files:
                     images = [Image.open(f) for f in uploaded_files]
                     finger_images_dict[finger_key] = images
-                    
                     st.caption(f"✅ {len(images)} image(s) uploaded")
                     thumb_cols = st.columns(min(3, len(images)))
                     for i, img in enumerate(images):
@@ -319,7 +321,7 @@ with tab1:
     
     st.divider()
     
-    # --- STEP 3: GENERATE ---
+    # --- STEP 3: GENERATE & RESET ---
     st.subheader("3️⃣ Generate Multi-Finger Photo")
     
     total_fingers = len(finger_images_dict)
@@ -338,6 +340,7 @@ with tab1:
     with col_btn:
         can_generate = bool(finger_images_dict) and bool(api_key)
         
+        # ปุ่ม GENERATE (สีหลัก)
         if st.button(
             "🚀 GENERATE PHOTO", 
             type="primary", 
@@ -345,7 +348,6 @@ with tab1:
             disabled=not can_generate
         ):
             with st.spinner("🎨 Generating multi-finger ring photo... (This may take a minute)"):
-                # ส่งค่า user_edited_prompt (ที่แก้ไขแล้ว) ไปยังฟังก์ชัน AI
                 img_bytes, error = generate_image_multi_finger(
                     api_key, 
                     finger_images_dict, 
@@ -358,6 +360,12 @@ with tab1:
                     st.rerun()
                 else:
                     st.error(f"❌ Generation failed: {error}")
+        
+        # --- NEW: ปุ่ม RESET FORM ---
+        # ใช้ on_click เพื่อเรียกฟังก์ชันล้างค่าก่อนหน้าเว็บจะโหลดใหม่
+        if st.button("🔄 Reset / Clear All", use_container_width=True, on_click=reset_app_state):
+            # ไม่ต้องใส่ logic ตรงนี้ เพราะ on_click ทำงานไปแล้ว
+            pass
     
     # --- DISPLAY RESULT ---
     if st.session_state.generated_result:
