@@ -7,54 +7,37 @@ from PIL import Image
 import time
 import re
 
-# --- 1. CONFIGURATION (ต้องอยู่บรรทัดแรกสุดหลัง import) ---
+# --- 1. CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Ring AI Generator - Multi Finger")
 
-# --- 2. ฟังก์ชันตรวจสอบรหัสผ่าน (ฉบับแก้ไข: กัน Error จอดำ) ---
+# --- 2. ฟังก์ชันตรวจสอบรหัสผ่าน ---
 def check_password():
-    """Returns `True` if the user had the correct password."""
-
-    # 1. เช็คก่อนเลยว่าตั้งค่า Secrets หรือยัง?
     if "my_app_password" not in st.secrets:
         st.error("❌ ยังไม่ได้ตั้งค่ารหัสผ่าน! กรุณาไปที่ Manage App > Settings > Secrets แล้วเพิ่ม: my_app_password = '...'", icon="⚠️")
-        st.stop() # หยุดการทำงานตรงนี้ ไม่ให้ Error
+        st.stop()
 
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        # ใช้ .get เพื่อกัน error กรณี key หาย
         if st.session_state["password"] == st.secrets.get("my_app_password"):
             st.session_state["password_correct"] = True
-            # ลบรหัสจากช่องกรอกเพื่อความสะอาด (ต้องเช็คก่อนลบ)
             if "password" in st.session_state:
                 del st.session_state["password"]  
         else:
             st.session_state["password_correct"] = False
 
-    # ถ้ายังไม่ได้ยืนยันรหัสผ่าน
     if "password_correct" not in st.session_state:
-        # แสดงช่องกรอกรหัสผ่าน
-        st.text_input(
-            "กรุณาใส่รหัสผ่านเพื่อใช้งาน", type="password", on_change=password_entered, key="password"
-        )
+        st.text_input("กรุณาใส่รหัสผ่านเพื่อใช้งาน", type="password", on_change=password_entered, key="password")
         return False
-    
-    # ถ้ายืนยันแล้วถูกต้อง
     elif st.session_state["password_correct"]:
         return True
-    
-    # ถ้าใส่ผิด
     else:
-        st.text_input(
-            "กรุณาใส่รหัสผ่านเพื่อใช้งาน", type="password", on_change=password_entered, key="password"
-        )
+        st.text_input("กรุณาใส่รหัสผ่านเพื่อใช้งาน", type="password", on_change=password_entered, key="password")
         st.error("😕 รหัสผ่านไม่ถูกต้อง")
         return False
 
-# --- 3. ส่วนเริ่มทำงานของแอพ (Logic สำคัญ) ---
+# --- 3. ส่วนเริ่มทำงานของแอพ ---
 if not check_password():
-    st.stop()  # <--- สำคัญมาก! ถ้าไม่ผ่านรหัสผ่าน ให้หยุดโหลดแอพทันที (คนอื่นจะไม่เห็นหน้า UI ข้างล่าง)
+    st.stop()
 
-# *** ถ้าผ่านรหัสมาได้ โค้ดด้านล่างนี้ถึงจะทำงาน ***
 st.toast("ยินดีต้อนรับ! เข้าสู่ระบบสำเร็จ", icon="✅")
 
 # Model ID
@@ -62,14 +45,12 @@ MODEL_IMAGE_GEN = "models/gemini-3-pro-image-preview"
 
 # --- HELPER: CLEANER ---
 def clean_key(value):
-    if value is None: 
-        return ""
+    if value is None: return ""
     return str(value).strip().replace(" ", "").replace('"', "").replace("'", "").replace("\n", "")
 
 # --- HELPER: SAFE IMAGE LOADER ---
 def safe_st_image(url, width=None, caption=None):
-    if not url: 
-        return
+    if not url: return
     try:
         clean_url = str(url).strip().replace(" ", "").replace("\n", "")
         if clean_url.startswith("http"):
@@ -77,21 +58,60 @@ def safe_st_image(url, width=None, caption=None):
     except Exception:
         st.warning("⚠️ Image unavailable")
 
-# --- HELPER: RESET STATE FUNCTION (NEW) ---
+# --- HELPER: RESET STATE FUNCTION ---
 def reset_app_state():
-    """ฟังก์ชันสำหรับล้างค่าทั้งหมดใน Form"""
+    """ฟังก์ชันสำหรับล้างค่าทั้งหมดใน Form รวมทั้งรูปที่ Fetch มาจาก Shopify"""
     st.session_state.generated_result = None
     
     keys_to_clear = []
     for key in st.session_state.keys():
+        # เพิ่มการล้างค่า fetch_shop_
         if (key.startswith("upload_") or 
             key.startswith("var_") or 
             key.startswith("edit_prompt_") or
+            key.startswith("fetch_shop_") or
             key == "prev_style_id"):
             keys_to_clear.append(key)
             
     for key in keys_to_clear:
         del st.session_state[key]
+
+# --- SHOPIFY HELPER FUNCTION (NEW) ---
+def get_shopify_product_images(shop_url, access_token, product_id):
+    """ดึงรูปภาพทั้งหมดจาก Shopify Product ID"""
+    shop_url = shop_url.replace("https://", "").replace("http://", "").strip()
+    if not shop_url.endswith(".myshopify.com"):
+        shop_url += ".myshopify.com"
+        
+    url = f"https://{shop_url}/admin/api/2024-01/products/{product_id}/images.json"
+    
+    headers = {
+        "X-Shopify-Access-Token": access_token,
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            images_data = data.get("images", [])
+            
+            pil_images = []
+            for img_info in images_data:
+                src = img_info.get("src")
+                if src:
+                    # Download Image Bytes
+                    img_resp = requests.get(src, stream=True)
+                    if img_resp.status_code == 200:
+                        img_pil = Image.open(BytesIO(img_resp.content))
+                        if img_pil.mode in ('RGBA', 'P'):
+                            img_pil = img_pil.convert('RGB')
+                        pil_images.append(img_pil)
+            return pil_images, None
+        else:
+            return None, f"Shopify Error {response.status_code}"
+    except Exception as e:
+        return None, f"Connection Error: {str(e)}"
 
 # --- DEFAULT PROMPTS ---
 DEFAULT_PROMPTS = [
@@ -111,8 +131,7 @@ def get_prompts():
         API_KEY = clean_key(raw_key)
         BIN_ID = clean_key(raw_bin)
         
-        if not API_KEY or not BIN_ID: 
-            return DEFAULT_PROMPTS
+        if not API_KEY or not BIN_ID: return DEFAULT_PROMPTS
             
         url = f"https://api.jsonbin.io/v3/b/{BIN_ID}/latest"
         headers = {"X-Master-Key": API_KEY}
@@ -121,8 +140,7 @@ def get_prompts():
         if response.status_code == 200:
             return response.json().get("record", DEFAULT_PROMPTS)
         return DEFAULT_PROMPTS
-    except: 
-        return DEFAULT_PROMPTS
+    except: return DEFAULT_PROMPTS
 
 def save_prompts(data):
     try:
@@ -134,14 +152,12 @@ def save_prompts(data):
         url = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
         headers = {"Content-Type": "application/json", "X-Master-Key": API_KEY}
         requests.put(url, json=data, headers=headers, timeout=10)
-    except Exception as e: 
-        st.error(f"Save failed: {e}")
+    except Exception as e: st.error(f"Save failed: {e}")
 
 # --- IMAGE HELPER ---
 def img_to_base64(img):
     buf = BytesIO()
-    if img.mode == 'RGBA': 
-        img = img.convert('RGB')
+    if img.mode == 'RGBA': img = img.convert('RGB')
     img.thumbnail((1024, 1024)) 
     img.save(buf, format="JPEG", quality=90)
     return base64.b64encode(buf.getvalue()).decode()
@@ -210,31 +226,21 @@ CRITICAL CONSTRAINTS:
             timeout=60
         )
         
-        if res.status_code != 200: 
-            return None, f"API Error {res.status_code}: {res.text}"
+        if res.status_code != 200: return None, f"API Error {res.status_code}: {res.text}"
             
         content = res.json().get("candidates", [])[0].get("content", {}).get("parts", [])[0]
         
-        if "inline_data" in content: 
-            return base64.b64decode(content["inline_data"]["data"]), None
-        if "inlineData" in content: 
-            return base64.b64decode(content["inlineData"]["data"]), None
-        if "text" in content: 
-            return None, f"Model returned text: {content['text']}"
+        if "inline_data" in content: return base64.b64decode(content["inline_data"]["data"]), None
+        if "inlineData" in content: return base64.b64decode(content["inlineData"]["data"]), None
+        if "text" in content: return None, f"Model returned text: {content['text']}"
             
         return None, "Unknown format"
-    except Exception as e: 
-        return None, str(e)
+    except Exception as e: return None, str(e)
 
 # --- SESSION STATE INIT ---
-if "library" not in st.session_state: 
-    st.session_state.library = get_prompts()
-
-if "generated_result" not in st.session_state:
-    st.session_state.generated_result = None
-
-if "edit_target" not in st.session_state:
-    st.session_state.edit_target = None
+if "library" not in st.session_state: st.session_state.library = get_prompts()
+if "generated_result" not in st.session_state: st.session_state.generated_result = None
+if "edit_target" not in st.session_state: st.session_state.edit_target = None
 
 # --- SIDEBAR CONFIG ---
 with st.sidebar:
@@ -248,17 +254,22 @@ with st.sidebar:
         st.success("✅ Google Key Loaded")
     else:
         api_key = st.text_input("Gemini API Key", type="password")
-    
     api_key = clean_key(api_key)
     
-    if "JSONBIN_API_KEY" in st.secrets: 
-        st.caption("✅ Database Connected")
-    else: 
-        st.warning("⚠️ Local Mode")
+    # Check Shopify Secrets
+    sh_shop = st.secrets.get("SHOPIFY_SHOP_URL", "")
+    sh_token = st.secrets.get("SHOPIFY_ACCESS_TOKEN", "")
+    if sh_shop and sh_token:
+        st.success("✅ Shopify Connected")
+    else:
+        st.warning("⚠️ Shopify Secrets Missing")
+    
+    if "JSONBIN_API_KEY" in st.secrets: st.caption("✅ Database Connected")
+    else: st.warning("⚠️ Local Mode")
 
 # --- MAIN UI ---
 st.title("💍 Ring AI Generator - Multi Finger Batch")
-st.caption("Upload ring references for up to 4 fingers and generate ONE professional photo with all rings")
+st.caption("Enter Product ID or Upload references for each finger.")
 
 # --- TABS ---
 tab1, tab2 = st.tabs(["✨ Generate Image", "📚 Library Manager"])
@@ -272,18 +283,13 @@ with tab1:
     ring_prompts = [p for p in lib if p.get('category') == 'Ring']
     
     if not ring_prompts:
-        st.error("❌ No Ring templates found. Please add templates in Library Manager.")
+        st.error("❌ No Ring templates found.")
         st.stop()
     
     col_style1, col_style2 = st.columns([2, 1])
     
     with col_style1:
-        selected_style = st.selectbox(
-            "Choose Ring Style", 
-            ring_prompts, 
-            format_func=lambda x: x.get('name', 'Unknown'),
-            key="style_select"
-        )
+        selected_style = st.selectbox("Choose Ring Style", ring_prompts, format_func=lambda x: x.get('name', 'Unknown'), key="style_select")
         
         template_text = selected_style.get('template', '')
         vars_list = [v.strip() for v in selected_style.get('variables', '').split(",") if v.strip()]
@@ -301,13 +307,7 @@ with tab1:
         
         st.write("**Preview & Edit Prompt:**")
         prompt_key = f"edit_prompt_area_{selected_style['id']}"
-        user_edited_prompt = st.text_area(
-            "Base Instruction", 
-            value=final_base_prompt, 
-            height=150, 
-            disabled=False, 
-            key=prompt_key
-        )
+        user_edited_prompt = st.text_area("Base Instruction", value=final_base_prompt, height=150, key=prompt_key)
     
     with col_style2:
         if selected_style.get("sample_url"):
@@ -316,9 +316,8 @@ with tab1:
     
     st.divider()
     
-    # --- STEP 2: UPLOAD REFERENCES ---
-    st.subheader("2️⃣ Upload Ring References for Each Finger")
-    st.caption("Upload images for the fingers you want to show rings on (1-4 fingers)")
+    # --- STEP 2: INPUT FOR EACH FINGER (SHOPIFY + UPLOAD) ---
+    st.subheader("2️⃣ Setup Each Finger (Product ID or Upload)")
     
     fingers = [
         {"key": "index", "name": "Index Finger", "emoji": "☝️"},
@@ -338,27 +337,64 @@ with tab1:
         finger_name = finger_info["name"]
         emoji = finger_info["emoji"]
         
+        # Session State Key for Fetched Images
+        fetch_key = f"fetch_shop_{finger_key}"
+        if fetch_key not in st.session_state:
+            st.session_state[fetch_key] = []
+        
         with columns_layout[idx]:
             with st.container(border=True):
                 st.markdown(f"### {emoji} {finger_name}")
                 
+                # --- A. SHOPIFY INPUT ---
+                if sh_shop and sh_token:
+                    c_id, c_btn = st.columns([2, 1])
+                    prod_id = c_id.text_input("Shopify ID", placeholder="Product ID", key=f"inp_{finger_key}", label_visibility="collapsed")
+                    
+                    if c_btn.button("Fetch", key=f"btn_{finger_key}"):
+                        if not prod_id:
+                            st.warning("Enter ID")
+                        else:
+                            with st.spinner(".."):
+                                imgs, err = get_shopify_product_images(sh_shop, sh_token, prod_id)
+                                if imgs:
+                                    st.session_state[fetch_key] = imgs
+                                    st.success("✅")
+                                else:
+                                    st.error("❌")
+                
+                # --- B. MANUAL UPLOAD ---
                 uploaded_files = st.file_uploader(
-                    "Upload ring reference(s)",
+                    "Or Upload Image",
                     accept_multiple_files=True,
                     type=["jpg", "png"],
                     key=f"upload_{finger_key}", 
                     label_visibility="collapsed"
                 )
                 
+                # --- C. COMBINE & DISPLAY ---
+                current_images = []
+                
+                # 1. Add Fetched
+                if st.session_state[fetch_key]:
+                    current_images.extend(st.session_state[fetch_key])
+                    st.info(f"Using {len(st.session_state[fetch_key])} from Shopify")
+                    if st.button("Clear Fetch", key=f"clr_{finger_key}"):
+                        st.session_state[fetch_key] = []
+                        st.rerun()
+                
+                # 2. Add Uploaded
                 if uploaded_files:
-                    images = [Image.open(f) for f in uploaded_files]
-                    finger_images_dict[finger_key] = images
-                    st.caption(f"✅ {len(images)} image(s) uploaded")
-                    thumb_cols = st.columns(min(3, len(images)))
-                    for i, img in enumerate(images):
-                        thumb_cols[i % len(thumb_cols)].image(img, use_column_width=True)
+                    current_images.extend([Image.open(f) for f in uploaded_files])
+                
+                # 3. Store in Main Dict & Preview
+                if current_images:
+                    finger_images_dict[finger_key] = current_images
+                    thumb_cols = st.columns(min(3, len(current_images)))
+                    for i, img in enumerate(current_images):
+                        thumb_cols[i % 3].image(img, use_column_width=True)
                 else:
-                    st.caption("⚪ No images (finger will be empty)")
+                    st.caption("⚪ Empty")
     
     st.divider()
     
@@ -372,37 +408,26 @@ with tab1:
     
     with col_info:
         if total_fingers > 0:
-            st.success(f"✅ Ready: {total_fingers} finger(s) with {total_images} reference image(s)")
+            st.success(f"✅ Ready: {total_fingers} finger(s) assigned.")
             finger_list = ", ".join([f["name"] for f in fingers if f["key"] in finger_images_dict])
             st.caption(f"📍 Fingers: {finger_list}")
         else:
-            st.warning("⚠️ Please upload at least one ring reference")
+            st.warning("⚠️ Assign at least one ring (ID or Upload)")
     
     with col_btn:
         can_generate = bool(finger_images_dict) and bool(api_key)
         
-        # ปุ่ม GENERATE
-        if st.button(
-            "🚀 GENERATE PHOTO", 
-            type="primary", 
-            use_container_width=True,
-            disabled=not can_generate
-        ):
-            with st.spinner("🎨 Generating multi-finger ring photo... (This may take a minute)"):
-                img_bytes, error = generate_image_multi_finger(
-                    api_key, 
-                    finger_images_dict, 
-                    user_edited_prompt 
-                )
+        if st.button("🚀 GENERATE PHOTO", type="primary", use_container_width=True, disabled=not can_generate):
+            with st.spinner("🎨 Generating multi-finger ring photo..."):
+                img_bytes, error = generate_image_multi_finger(api_key, finger_images_dict, user_edited_prompt)
                 
                 if img_bytes:
                     st.session_state.generated_result = img_bytes
-                    st.success("✅ Photo generated successfully!")
+                    st.success("✅ Done!")
                     st.rerun()
                 else:
-                    st.error(f"❌ Generation failed: {error}")
+                    st.error(f"❌ Failed: {error}")
         
-        # ปุ่ม RESET
         if st.button("🔄 Reset / Clear All", use_container_width=True, on_click=reset_app_state):
             pass
     
@@ -412,24 +437,18 @@ with tab1:
         st.subheader("✨ Generated Result")
         
         col_result1, col_result2 = st.columns([3, 1])
-        
         with col_result1:
-            st.image(
-                st.session_state.generated_result, 
-                use_column_width=True,
-                caption="Multi-Finger Ring Photo"
-            )
+            st.image(st.session_state.generated_result, use_column_width=True, caption="Multi-Finger Ring Photo")
         
         with col_result2:
             st.download_button(
-                "📥 Download Image",
+                "📥 Download",
                 st.session_state.generated_result,
                 "multi_finger_rings.jpg",
                 "image/jpeg",
                 use_container_width=True,
                 type="primary"
             )
-            
             if st.button("🔄 Generate Again", use_container_width=True):
                 st.session_state.generated_result = None
                 st.rerun()
@@ -437,82 +456,41 @@ with tab1:
 # ============= TAB 2: LIBRARY MANAGER =============
 with tab2:
     st.subheader("📚 Prompt Library Manager")
-    st.caption("Manage your ring photo style templates")
-    
     target = st.session_state.edit_target
     title = f"✏️ Edit: {target['name']}" if target else "➕ Add New Template"
     
     with st.form("lib_form", border=True):
         st.write(f"**{title}**")
-        
         c1, c2 = st.columns(2)
-        n = c1.text_input("Template Name", value=target['name'] if target else "")
+        n = c1.text_input("Name", value=target['name'] if target else "")
         c = c2.text_input("Category", value=target['category'] if target else "Ring")
-        
-        t = st.text_area("Prompt Template", value=target['template'] if target else "", height=120)
-        
+        t = st.text_area("Template", value=target['template'] if target else "", height=120)
         c3, c4 = st.columns(2)
-        v = c3.text_input("Variables (comma-separated)", value=target['variables'] if target else "")
-        u = c4.text_input("Sample Image URL", value=target['sample_url'] if target else "")
+        v = c3.text_input("Vars", value=target['variables'] if target else "")
+        u = c4.text_input("Sample URL", value=target['sample_url'] if target else "")
         
         cols = st.columns([1, 1, 3])
-        
         if cols[0].form_submit_button("💾 Save", type="primary"):
-            new = {
-                "id": target['id'] if target else str(len(st.session_state.library) + 1000),
-                "name": n,
-                "category": c,
-                "template": t,
-                "variables": v,
-                "sample_url": u
-            }
-            
+            new = {"id": target['id'] if target else str(len(st.session_state.library)+1000), "name": n, "category": c, "template": t, "variables": v, "sample_url": u}
             if target:
                 for idx, item in enumerate(st.session_state.library):
-                    if item['id'] == target['id']:
-                        st.session_state.library[idx] = new
-                        break
-            else:
-                st.session_state.library.append(new)
-            
+                    if item['id'] == target['id']: st.session_state.library[idx] = new; break
+            else: st.session_state.library.append(new)
             save_prompts(st.session_state.library)
-            st.session_state.edit_target = None
-            st.success("✅ Saved!")
-            st.rerun()
+            st.session_state.edit_target = None; st.rerun()
         
         if target and cols[1].form_submit_button("❌ Cancel"):
-            st.session_state.edit_target = None
-            st.rerun()
+            st.session_state.edit_target = None; st.rerun()
     
     st.divider()
-    st.write("**Existing Templates:**")
-    
-    ring_items = [p for p in st.session_state.library if p.get('category') == 'Ring']
-    
-    if not ring_items:
-        st.info("No Ring templates yet. Add one above!")
-    
-    for i, p in enumerate(ring_items):
+    for i, p in enumerate([x for x in st.session_state.library if x.get('category') == 'Ring']):
         c1, c2, c3, c4 = st.columns([1, 4, 1, 1])
-        
         if p.get("sample_url"):
-            with c1:
-                safe_st_image(p["sample_url"], width=60)
-        
-        c2.write(f"**{p.get('name')}**")
-        c2.caption(f"Variables: {p.get('variables', 'None')}")
-        
-        if c3.button("✏️", key=f"e{i}"):
-            st.session_state.edit_target = p
-            st.rerun()
-        
-        if c4.button("🗑️", key=f"d{i}"):
-            st.session_state.library.remove(p)
-            save_prompts(st.session_state.library)
-            st.rerun()
-        
+            with c1: safe_st_image(p["sample_url"], width=60)
+        c2.write(f"**{p.get('name')}**"); c2.caption(f"Vars: {p.get('variables')}")
+        if c3.button("✏️", key=f"e{i}"): st.session_state.edit_target = p; st.rerun()
+        if c4.button("🗑️", key=f"d{i}"): st.session_state.library.remove(p); save_prompts(st.session_state.library); st.rerun()
         st.divider()
 
-# --- FOOTER ---
 st.markdown("---")
-st.caption("💎 Made for jewelry creators | Powered by Gemini AI")
+st.caption("💎 Powered by Gemini AI")
