@@ -38,10 +38,9 @@ def check_password():
 if not check_password():
     st.stop()
 
-st.toast("ยินดีต้อนรับ! เข้าสู่ระบบสำเร็จ", icon="✅")
-
 # Model ID
-MODEL_IMAGE_GEN = "models/gemini-3-pro-image-preview"
+MODEL_IMAGE_GEN = "models/gemini-3-pro-image-preview" # For generating images
+MODEL_SEO_GEN = "models/gemini-1.5-flash" # For generating SEO text (Fast & Cheap)
 
 # --- HELPER: CLEANER ---
 def clean_key(value):
@@ -65,18 +64,19 @@ def reset_app_state():
     
     keys_to_clear = []
     for key in st.session_state.keys():
-        # เพิ่มการล้างค่า fetch_shop_
         if (key.startswith("upload_") or 
             key.startswith("var_") or 
             key.startswith("edit_prompt_") or
             key.startswith("fetch_shop_") or
+            key.startswith("inp_") or # Clear input IDs
             key == "prev_style_id"):
             keys_to_clear.append(key)
             
     for key in keys_to_clear:
-        del st.session_state[key]
+        if key in st.session_state:
+            del st.session_state[key]
 
-# --- SHOPIFY HELPER FUNCTION (NEW) ---
+# --- SHOPIFY HELPER FUNCTION (EXISTING) ---
 def get_shopify_product_images(shop_url, access_token, product_id):
     """ดึงรูปภาพทั้งหมดจาก Shopify Product ID"""
     shop_url = shop_url.replace("https://", "").replace("http://", "").strip()
@@ -100,7 +100,6 @@ def get_shopify_product_images(shop_url, access_token, product_id):
             for img_info in images_data:
                 src = img_info.get("src")
                 if src:
-                    # Download Image Bytes
                     img_resp = requests.get(src, stream=True)
                     if img_resp.status_code == 200:
                         img_pil = Image.open(BytesIO(img_resp.content))
@@ -112,6 +111,63 @@ def get_shopify_product_images(shop_url, access_token, product_id):
             return None, f"Shopify Error {response.status_code}"
     except Exception as e:
         return None, f"Connection Error: {str(e)}"
+
+# --- SHOPIFY HELPER: GET CONTEXT FOR SEO (NEW) ---
+def get_product_seo_context(shop_url, access_token, product_ids):
+    """ดึง Title และ Handle จาก Input IDs เพื่อเอาไปทำ SEO"""
+    if not product_ids: return ""
+    
+    shop_url = shop_url.replace("https://", "").replace("http://", "").strip()
+    if not shop_url.endswith(".myshopify.com"): shop_url += ".myshopify.com"
+    
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    
+    context_list = []
+    
+    # เพื่อความรวดเร็ว จะดึงข้อมูลทีละตัว (ใน Production จริงควรใช้ GraphQL ถ้า ID เยอะ)
+    for pid in product_ids:
+        if not pid: continue
+        url = f"https://{shop_url}/admin/api/2024-01/products/{pid}.json?fields=title,handle"
+        try:
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                p = res.json().get("product", {})
+                title = p.get("title", "")
+                handle = p.get("handle", "")
+                if title:
+                    context_list.append(f"Source Product: {title} (URL slug: {handle})")
+        except: pass
+        
+    return "\n".join(context_list)
+
+# --- SHOPIFY HELPER: UPLOAD IMAGE (NEW) ---
+def upload_image_to_shopify(shop_url, access_token, product_id, image_bytes, filename, alt_text):
+    """อัปโหลดรูป Base64 กลับขึ้นไปที่ Shopify"""
+    shop_url = shop_url.replace("https://", "").replace("http://", "").strip()
+    if not shop_url.endswith(".myshopify.com"): shop_url += ".myshopify.com"
+    
+    url = f"https://{shop_url}/admin/api/2024-01/products/{product_id}/images.json"
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    
+    # Convert bytes to base64 string
+    b64_string = base64.b64encode(image_bytes).decode('utf-8')
+    
+    payload = {
+        "image": {
+            "attachment": b64_string,
+            "filename": filename,
+            "alt": alt_text
+        }
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=20)
+        if response.status_code in [200, 201]:
+            return True, response.json()
+        else:
+            return False, f"Error {response.status_code}: {response.text}"
+    except Exception as e:
+        return False, str(e)
 
 # --- DEFAULT PROMPTS ---
 DEFAULT_PROMPTS = [
@@ -161,6 +217,58 @@ def img_to_base64(img):
     img.thumbnail((1024, 1024)) 
     img.save(buf, format="JPEG", quality=90)
     return base64.b64encode(buf.getvalue()).decode()
+
+# --- AI FUNCTION: GENERATE SEO DATA (NEW) ---
+def generate_seo_data(api_key, image_bytes, context_text):
+    """ใช้ Gemini สร้าง SEO Filename และ Alt Text"""
+    key = clean_key(api_key)
+    url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_SEO_GEN}:generateContent?key={key}"
+    
+    prompt = f"""
+    You are an SEO expert for a Jewelry E-commerce store.
+    
+    INPUT CONTEXT:
+    The image provided is a generated photo of a hand wearing rings.
+    The rings in this photo are based on these source products:
+    {context_text}
+    
+    TASK:
+    Create an SEO-friendly image filename and an Alt Text attribute.
+    
+    REQUIREMENTS:
+    1. filename: lowercase, use hyphens (-) as separators, include keywords like 'ring', 'gold', 'diamond' if visible or in context. Must end with .jpg.
+    2. alt_text: Descriptive, natural language, mentioning the hand model and the specific style of rings. Max 125 characters.
+    
+    OUTPUT FORMAT (JSON ONLY):
+    {{
+        "filename": "example-ring-name.jpg",
+        "alt_text": "Close up of woman hand wearing..."
+    }}
+    """
+    
+    # Prepare Image Part
+    b64_img = base64.b64encode(image_bytes).decode('utf-8')
+    
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": "image/jpeg", "data": b64_img}}
+            ]
+        }],
+        "generationConfig": {"response_mime_type": "application/json"}
+    }
+    
+    try:
+        res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
+        if res.status_code == 200:
+            result = res.json().get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "{}")
+            return json.loads(result)
+        else:
+            return {"filename": "ring-generated.jpg", "alt_text": "Ring on hand"}
+    except Exception as e:
+        print(f"SEO Gen Error: {e}")
+        return {"filename": "ring-generated.jpg", "alt_text": "Ring on hand"}
 
 # --- AI FUNCTION (GEMINI) - BATCH ALL FINGERS ---
 def generate_image_multi_finger(api_key, finger_images_dict, base_prompt):
@@ -241,6 +349,8 @@ CRITICAL CONSTRAINTS:
 if "library" not in st.session_state: st.session_state.library = get_prompts()
 if "generated_result" not in st.session_state: st.session_state.generated_result = None
 if "edit_target" not in st.session_state: st.session_state.edit_target = None
+# Track input IDs for SEO context
+if "used_input_ids" not in st.session_state: st.session_state.used_input_ids = []
 
 # --- SIDEBAR CONFIG ---
 with st.sidebar:
@@ -331,6 +441,7 @@ with tab1:
     columns_layout = [row1_col1, row1_col2, row2_col1, row2_col2]
     
     finger_images_dict = {}
+    temp_input_ids = [] # Store IDs for current session
     
     for idx, finger_info in enumerate(fingers):
         finger_key = finger_info["key"]
@@ -347,9 +458,11 @@ with tab1:
                 st.markdown(f"### {emoji} {finger_name}")
                 
                 # --- A. SHOPIFY INPUT ---
+                current_id_val = ""
                 if sh_shop and sh_token:
                     c_id, c_btn = st.columns([2, 1])
                     prod_id = c_id.text_input("Shopify ID", placeholder="Product ID", key=f"inp_{finger_key}", label_visibility="collapsed")
+                    current_id_val = prod_id
                     
                     if c_btn.button("Fetch", key=f"btn_{finger_key}"):
                         if not prod_id:
@@ -363,6 +476,10 @@ with tab1:
                                 else:
                                     st.error("❌")
                 
+                # ถ้ามีการกรอก ID ไว้ และ Fetch สำเร็จ ให้เก็บ ID ไว้ใช้ตอนทำ SEO
+                if current_id_val and st.session_state[fetch_key]:
+                    temp_input_ids.append(current_id_val)
+                    
                 # --- B. MANUAL UPLOAD ---
                 uploaded_files = st.file_uploader(
                     "Or Upload Image",
@@ -402,7 +519,6 @@ with tab1:
     st.subheader("3️⃣ Generate Multi-Finger Photo")
     
     total_fingers = len(finger_images_dict)
-    total_images = sum(len(imgs) for imgs in finger_images_dict.values())
     
     col_info, col_btn = st.columns([2, 1])
     
@@ -418,6 +534,9 @@ with tab1:
         can_generate = bool(finger_images_dict) and bool(api_key)
         
         if st.button("🚀 GENERATE PHOTO", type="primary", use_container_width=True, disabled=not can_generate):
+            # Save Input IDs for SEO Context
+            st.session_state.used_input_ids = temp_input_ids 
+            
             with st.spinner("🎨 Generating multi-finger ring photo..."):
                 img_bytes, error = generate_image_multi_finger(api_key, finger_images_dict, user_edited_prompt)
                 
@@ -431,24 +550,67 @@ with tab1:
         if st.button("🔄 Reset / Clear All", use_container_width=True, on_click=reset_app_state):
             pass
     
-    # --- DISPLAY RESULT ---
+    # --- DISPLAY RESULT & UPLOAD TO SHOPIFY ---
     if st.session_state.generated_result:
         st.divider()
         st.subheader("✨ Generated Result")
         
-        col_result1, col_result2 = st.columns([3, 1])
+        col_result1, col_result2 = st.columns([2, 1])
         with col_result1:
             st.image(st.session_state.generated_result, use_column_width=True, caption="Multi-Finger Ring Photo")
         
         with col_result2:
+            st.markdown("### 💾 Actions")
             st.download_button(
-                "📥 Download",
+                "📥 Download Image",
                 st.session_state.generated_result,
                 "multi_finger_rings.jpg",
                 "image/jpeg",
                 use_container_width=True,
-                type="primary"
+                type="secondary"
             )
+            
+            st.divider()
+            st.markdown("### ☁️ Upload to Shopify")
+            
+            # Input for Target Product ID
+            target_upload_id = st.text_input("Target Product ID", key="target_upload_id", placeholder="Ex: 8234...", help="ID ของสินค้าที่ต้องการส่งรูปนี้ขึ้นไป")
+            
+            if st.button("⬆️ Generate SEO & Upload", type="primary", use_container_width=True, disabled=not target_upload_id):
+                with st.spinner("🤖 Analysing for SEO & Uploading..."):
+                    # 1. Fetch Context from Input IDs (For SEO)
+                    input_context_str = ""
+                    if st.session_state.used_input_ids:
+                        input_context_str = get_product_seo_context(sh_shop, sh_token, st.session_state.used_input_ids)
+                    else:
+                        input_context_str = "No specific input product ID provided, assume generic luxury ring."
+                        
+                    # 2. Generate SEO Data
+                    seo_data = generate_seo_data(api_key, st.session_state.generated_result, input_context_str)
+                    final_filename = seo_data.get("filename", "gen-ring.jpg")
+                    final_alt = seo_data.get("alt_text", "Ring AI Generated")
+                    
+                    st.toast(f"SEO Generated: {final_filename}", icon="🧠")
+                    
+                    # 3. Upload to Shopify
+                    success, resp = upload_image_to_shopify(
+                        sh_shop, sh_token, 
+                        target_upload_id, 
+                        st.session_state.generated_result, 
+                        final_filename, 
+                        final_alt
+                    )
+                    
+                    if success:
+                        st.success(f"✅ Uploaded Successfully!\nFile: {final_filename}")
+                        # Clear target ID input via session state trick or rerun
+                        # Note: st.text_input value persists unless cleared explicitly via callback or key change. 
+                        # Simplest way here is to let user know and they can clear or use standard reset.
+                        time.sleep(1)
+                        # Optional: Clear the input ID field manually if needed by rerun, but might annoy user if they want to see success msg.
+                    else:
+                        st.error(f"❌ Upload Failed: {resp}")
+
             if st.button("🔄 Generate Again", use_container_width=True):
                 st.session_state.generated_result = None
                 st.rerun()
