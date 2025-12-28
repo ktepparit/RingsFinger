@@ -8,7 +8,7 @@ import time
 import re
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="Ring AI Generator - Multi Finger")
+st.set_page_config(layout="wide", page_title="Ring & Jewelry AI Generator")
 
 # --- 2. ฟังก์ชันตรวจสอบรหัสผ่าน ---
 def check_password():
@@ -112,7 +112,7 @@ def get_shopify_product_images(shop_url, access_token, product_id):
     except Exception as e:
         return None, f"Connection Error: {str(e)}"
 
-# --- SHOPIFY HELPER: GET TARGET PRODUCT INFO (NEW) ---
+# --- SHOPIFY HELPER: GET TARGET PRODUCT INFO ---
 def get_target_product_details(shop_url, access_token, product_id):
     """ดึง Title และ Handle ของ Product ปลายทางเพื่อทำ SEO"""
     shop_url = shop_url.replace("https://", "").replace("http://", "").strip()
@@ -167,7 +167,7 @@ def upload_image_to_shopify(shop_url, access_token, product_id, image_bytes, fil
 DEFAULT_PROMPTS = [
     {
         "id": "p1", "name": "Luxury Hand (Ring)", "category": "Ring",
-        "template": "A realistic close-up of a female hand model wearing a ring with {face_size} face size, soft studio lighting, elegant jewelry photography.",
+        "template": "A realistic close-up of a female hand model wearing jewelry, {face_size} face size, soft studio lighting, elegant jewelry photography.",
         "variables": "face_size",
         "sample_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Ring_render.jpg/320px-Ring_render.jpg"
     }
@@ -212,9 +212,8 @@ def img_to_base64(img):
     img.save(buf, format="JPEG", quality=90)
     return base64.b64encode(buf.getvalue()).decode()
 
-# --- AI FUNCTION: GENERATE SEO DATA (UPDATED) ---
+# --- AI FUNCTION: GENERATE SEO DATA ---
 def generate_seo_data(api_key, image_bytes, product_title, product_handle):
-    """ใช้ Gemini สร้าง SEO Filename และ Alt Text โดยอิงจาก Product ปลายทาง"""
     key = clean_key(api_key)
     url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_SEO_GEN}:generateContent?key={key}"
     
@@ -241,7 +240,6 @@ def generate_seo_data(api_key, image_bytes, product_title, product_handle):
     }}
     """
     
-    # Prepare Image Part
     b64_img = base64.b64encode(image_bytes).decode('utf-8')
     
     payload = {
@@ -260,63 +258,80 @@ def generate_seo_data(api_key, image_bytes, product_title, product_handle):
             result = res.json().get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "{}")
             return json.loads(result)
         else:
-            # Fallback using handle if API fails
             fallback_name = f"{product_handle}-model.jpg" if product_handle else "ring-generated.jpg"
             return {"filename": fallback_name, "alt_text": product_title or "Ring on hand"}
     except Exception as e:
         return {"filename": "ring-generated.jpg", "alt_text": "Ring on hand"}
 
-# --- AI FUNCTION (GEMINI) - BATCH ALL FINGERS ---
-def generate_image_multi_finger(api_key, finger_images_dict, base_prompt):
+# --- AI FUNCTION (GEMINI) - BATCH ALL JEWELRY (Fingers + Wrist + Neck) ---
+def generate_image_multi_finger(api_key, all_images_dict, base_prompt):
     key = clean_key(api_key)
     url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_IMAGE_GEN}:generateContent?key={key}"
     
-    finger_names = {
+    # Mapping ตำแหน่งการใส่
+    jewelry_locations = {
         "index": "Index Finger (the finger next to the thumb)",
         "middle": "Middle Finger (the center finger)", 
         "ring": "Ring Finger (the finger between middle and little)",
-        "little": "Little Finger (the smallest finger, pinky)"
+        "little": "Little Finger (the smallest finger, pinky)",
+        "bracelet": "Wrist (on the same arm as the hand)",
+        "necklace": "Neck (wearing the necklace/pendant around the neck)"
     }
     
-    finger_instructions = []
+    instructions = []
     image_counter = 1
-    rings_count = 0
-    ordered_keys = ["index", "middle", "ring", "little"]
+    total_items = 0
     
-    for finger_key in ordered_keys:
-        if finger_key in finger_images_dict and finger_images_dict[finger_key]:
-            num_imgs = len(finger_images_dict[finger_key])
-            rings_count += 1
+    # ลำดับสำคัญ: นิ้ว -> ข้อมือ -> คอ
+    ordered_keys = ["index", "middle", "ring", "little", "bracelet", "necklace"]
+    
+    # ตรวจสอบว่ามีสร้อยคอหรือไม่ เพื่อปรับ Framing ของภาพ
+    has_necklace = "necklace" in all_images_dict and all_images_dict["necklace"]
+    
+    if has_necklace:
+        framing_instruction = "FRAMING: Portrait or Bust shot. Must show the Model's Hand (with rings/bracelet) and Neck (with necklace) clearly in the same frame."
+    else:
+        framing_instruction = "FRAMING: Close-up of the Hand and Wrist."
+
+    for item_key in ordered_keys:
+        if item_key in all_images_dict and all_images_dict[item_key]:
+            num_imgs = len(all_images_dict[item_key])
+            total_items += 1
+            
+            # สร้าง Instruction
+            location_name = jewelry_locations[item_key]
+            
             if num_imgs == 1:
-                finger_instructions.append(f"- {finger_names[finger_key]}: MUST wear the ring shown in reference image #{image_counter}")
+                instructions.append(f"- {location_name}: MUST wear the item shown in reference image #{image_counter}")
                 image_counter += 1
             else:
                 img_range = f"reference images #{image_counter}-{image_counter + num_imgs - 1}"
-                finger_instructions.append(f"- {finger_names[finger_key]}: MUST wear the ring combination shown in {img_range}")
+                instructions.append(f"- {location_name}: MUST wear the item combination shown in {img_range}")
                 image_counter += num_imgs
     
-    instruction_text = "\n".join(finger_instructions)
+    instruction_text = "\n".join(instructions)
     
     full_prompt = f"""{base_prompt}
 
-TASK: Generate a professional photograph of a single human hand wearing exactly {rings_count} rings.
+TASK: Generate a professional photograph of a female model wearing jewelry.
+{framing_instruction}
 
-STRICT MANDATORY RING PLACEMENT (Follow Exactly):
+STRICT MANDATORY JEWELRY PLACEMENT (Follow Exactly):
 {instruction_text}
 
 CRITICAL CONSTRAINTS:
-1.  ANATOMICAL CORRECTNESS IS PARAMOUNT. Place each ring precisely on the named finger in the instructions above.
-2.  DO NOT SHIFT RINGS. Do not place a ring intended for one finger onto an adjacent finger.
-3.  REFERENCE ACCURACY. Keep each ring's design, gemstones, and metal texture EXACTLY as shown in its corresponding reference image(s).
-4.  Show only ONE hand in the final image.
-5.  Ensure lighting and pose highlight all {rings_count} rings clearly.
+1.  **ANATOMICAL CORRECTNESS IS PARAMOUNT.** Place each ring, bracelet, and necklace precisely on the named body part instructions above.
+2.  **DO NOT SHIFT ITEMS.** Do not place a ring on the wrong finger, or a bracelet on the neck.
+3.  **REFERENCE ACCURACY.** Keep each jewelry piece's design, gemstones, and metal texture EXACTLY as shown in its corresponding reference image(s).
+4.  Show only ONE hand in the final image (unless posing requires the other, but focus on the one with rings).
+5.  Ensure lighting highlights all {total_items} jewelry pieces clearly.
 """
 
     parts = [{"text": full_prompt}]
     
-    for finger_key in ordered_keys:
-        if finger_key in finger_images_dict:
-            for img in finger_images_dict[finger_key]:
+    for item_key in ordered_keys:
+        if item_key in all_images_dict:
+            for img in all_images_dict[item_key]:
                 parts.append({"inline_data": {"mime_type": "image/jpeg", "data": img_to_base64(img)}})
     
     try:
@@ -372,8 +387,8 @@ with st.sidebar:
     else: st.warning("⚠️ Local Mode")
 
 # --- MAIN UI ---
-st.title("💍 Ring AI Generator - Multi Finger Batch")
-st.caption("Enter Product ID or Upload references for each finger.")
+st.title("💍 Ring & Jewelry AI Generator")
+st.caption("Generate full jewelry set photos: Rings, Bracelets, and Necklaces.")
 
 # --- TABS ---
 tab1, tab2 = st.tabs(["✨ Generate Image", "📚 Library Manager"])
@@ -381,7 +396,7 @@ tab1, tab2 = st.tabs(["✨ Generate Image", "📚 Library Manager"])
 # ============= TAB 1: GENERATE IMAGE =============
 with tab1:
     # --- STEP 1: SELECT STYLE ---
-    st.subheader("1️⃣ Select Ring Style Template")
+    st.subheader("1️⃣ Select Style Template")
     
     lib = st.session_state.library
     ring_prompts = [p for p in lib if p.get('category') == 'Ring']
@@ -393,7 +408,7 @@ with tab1:
     col_style1, col_style2 = st.columns([2, 1])
     
     with col_style1:
-        selected_style = st.selectbox("Choose Ring Style", ring_prompts, format_func=lambda x: x.get('name', 'Unknown'), key="style_select")
+        selected_style = st.selectbox("Choose Style", ring_prompts, format_func=lambda x: x.get('name', 'Unknown'), key="style_select")
         
         template_text = selected_style.get('template', '')
         vars_list = [v.strip() for v in selected_style.get('variables', '').split(",") if v.strip()]
@@ -420,42 +435,24 @@ with tab1:
     
     st.divider()
     
-    # --- STEP 2: INPUT FOR EACH FINGER (SHOPIFY + UPLOAD) ---
-    st.subheader("2️⃣ Setup Each Finger (Product ID or Upload)")
-    
-    fingers = [
-        {"key": "index", "name": "Index Finger", "emoji": "☝️"},
-        {"key": "middle", "name": "Middle Finger", "emoji": "🖕"},
-        {"key": "ring", "name": "Ring Finger", "emoji": "💍"},
-        {"key": "little", "name": "Little Finger", "emoji": "🤙"}
-    ]
-    
-    row1_col1, row1_col2 = st.columns(2)
-    row2_col1, row2_col2 = st.columns(2)
-    columns_layout = [row1_col1, row1_col2, row2_col1, row2_col2]
-    
-    finger_images_dict = {}
-    
-    for idx, finger_info in enumerate(fingers):
-        finger_key = finger_info["key"]
-        finger_name = finger_info["name"]
-        emoji = finger_info["emoji"]
-        
-        # Session State Key for Fetched Images
-        fetch_key = f"fetch_shop_{finger_key}"
-        if fetch_key not in st.session_state:
-            st.session_state[fetch_key] = []
-        
-        with columns_layout[idx]:
+    # --- HELPER UI FOR IMAGE INPUT ---
+    def render_input_block(item_key, item_name, item_emoji, container):
+        """Helper to render input block for any item (finger or accessory)"""
+        with container:
             with st.container(border=True):
-                st.markdown(f"### {emoji} {finger_name}")
+                st.markdown(f"### {item_emoji} {item_name}")
                 
-                # --- A. SHOPIFY INPUT ---
+                # Fetch Key
+                fetch_key = f"fetch_shop_{item_key}"
+                if fetch_key not in st.session_state:
+                    st.session_state[fetch_key] = []
+                
+                # Shopify Input
                 if sh_shop and sh_token:
                     c_id, c_btn = st.columns([2, 1])
-                    prod_id = c_id.text_input("Shopify ID", placeholder="Product ID", key=f"inp_{finger_key}", label_visibility="collapsed")
+                    prod_id = c_id.text_input("Shopify ID", placeholder="ID", key=f"inp_{item_key}", label_visibility="collapsed")
                     
-                    if c_btn.button("Fetch", key=f"btn_{finger_key}"):
+                    if c_btn.button("Fetch", key=f"btn_{item_key}"):
                         if not prod_id:
                             st.warning("Enter ID")
                         else:
@@ -467,62 +464,95 @@ with tab1:
                                 else:
                                     st.error("❌")
                 
-                # --- B. MANUAL UPLOAD ---
+                # Manual Upload
                 uploaded_files = st.file_uploader(
-                    "Or Upload Image",
-                    accept_multiple_files=True,
-                    type=["jpg", "png"],
-                    key=f"upload_{finger_key}", 
-                    label_visibility="collapsed"
+                    "Or Upload", accept_multiple_files=True, type=["jpg", "png"],
+                    key=f"upload_{item_key}", label_visibility="collapsed"
                 )
                 
-                # --- C. COMBINE & DISPLAY ---
+                # Combine & Display
                 current_images = []
-                
-                # 1. Add Fetched
                 if st.session_state[fetch_key]:
                     current_images.extend(st.session_state[fetch_key])
-                    st.info(f"Using {len(st.session_state[fetch_key])} from Shopify")
-                    if st.button("Clear Fetch", key=f"clr_{finger_key}"):
+                    st.info(f"Shopify: {len(st.session_state[fetch_key])}")
+                    if st.button("Clear Fetch", key=f"clr_{item_key}"):
                         st.session_state[fetch_key] = []
                         st.rerun()
                 
-                # 2. Add Uploaded
                 if uploaded_files:
                     current_images.extend([Image.open(f) for f in uploaded_files])
                 
-                # 3. Store in Main Dict & Preview
+                # Return images for main dict
                 if current_images:
-                    finger_images_dict[finger_key] = current_images
+                    st.caption(f"✅ {len(current_images)} images")
                     thumb_cols = st.columns(min(3, len(current_images)))
                     for i, img in enumerate(current_images):
                         thumb_cols[i % 3].image(img, use_column_width=True)
+                    return current_images
                 else:
                     st.caption("⚪ Empty")
+                    return []
+
+    # --- STEP 2: RINGS INPUT ---
+    st.subheader("2️⃣ Fingers (Rings)")
     
+    fingers = [
+        {"key": "index", "name": "Index Finger", "emoji": "☝️"},
+        {"key": "middle", "name": "Middle Finger", "emoji": "🖕"},
+        {"key": "ring", "name": "Ring Finger", "emoji": "💍"},
+        {"key": "little", "name": "Little Finger", "emoji": "🤙"}
+    ]
+    
+    row1_col1, row1_col2 = st.columns(2)
+    row2_col1, row2_col2 = st.columns(2)
+    finger_cols = [row1_col1, row1_col2, row2_col1, row2_col2]
+    
+    all_jewelry_images = {}
+    
+    for idx, f in enumerate(fingers):
+        imgs = render_input_block(f["key"], f["name"], f["emoji"], finger_cols[idx])
+        if imgs: all_jewelry_images[f["key"]] = imgs
+        
+    st.divider()
+
+    # --- STEP 3: ACCESSORIES INPUT (NEW) ---
+    st.subheader("3️⃣ Accessories (Bracelet & Necklace)")
+    
+    accessories = [
+        {"key": "bracelet", "name": "Bracelet", "emoji": "📿"},
+        {"key": "necklace", "name": "Necklace / Pendant", "emoji": "⛓️"}
+    ]
+    
+    acc_c1, acc_c2 = st.columns(2)
+    acc_cols = [acc_c1, acc_c2]
+    
+    for idx, acc in enumerate(accessories):
+        imgs = render_input_block(acc["key"], acc["name"], acc["emoji"], acc_cols[idx])
+        if imgs: all_jewelry_images[acc["key"]] = imgs
+
     st.divider()
     
-    # --- STEP 3: GENERATE & RESET ---
-    st.subheader("3️⃣ Generate Multi-Finger Photo")
+    # --- STEP 4: GENERATE & RESET ---
+    st.subheader("4️⃣ Generate Photo")
     
-    total_fingers = len(finger_images_dict)
+    total_items = len(all_jewelry_images)
     
     col_info, col_btn = st.columns([2, 1])
     
     with col_info:
-        if total_fingers > 0:
-            st.success(f"✅ Ready: {total_fingers} finger(s) assigned.")
-            finger_list = ", ".join([f["name"] for f in fingers if f["key"] in finger_images_dict])
-            st.caption(f"📍 Fingers: {finger_list}")
+        if total_items > 0:
+            st.success(f"✅ Ready: {total_items} jewelry items assigned.")
+            item_list = ", ".join([k.capitalize() for k in all_jewelry_images.keys()])
+            st.caption(f"📍 Items: {item_list}")
         else:
-            st.warning("⚠️ Assign at least one ring (ID or Upload)")
+            st.warning("⚠️ Assign at least one item (ID or Upload)")
     
     with col_btn:
-        can_generate = bool(finger_images_dict) and bool(api_key)
+        can_generate = bool(all_jewelry_images) and bool(api_key)
         
         if st.button("🚀 GENERATE PHOTO", type="primary", use_container_width=True, disabled=not can_generate):
-            with st.spinner("🎨 Generating multi-finger ring photo..."):
-                img_bytes, error = generate_image_multi_finger(api_key, finger_images_dict, user_edited_prompt)
+            with st.spinner("🎨 Generating jewelry photo..."):
+                img_bytes, error = generate_image_multi_finger(api_key, all_jewelry_images, user_edited_prompt)
                 
                 if img_bytes:
                     st.session_state.generated_result = img_bytes
@@ -534,21 +564,21 @@ with tab1:
         if st.button("🔄 Reset / Clear All", use_container_width=True, on_click=reset_app_state):
             pass
     
-    # --- DISPLAY RESULT & UPLOAD TO SHOPIFY (UPDATED FLOW) ---
+    # --- DISPLAY RESULT ---
     if st.session_state.generated_result:
         st.divider()
         st.subheader("✨ Generated Result")
         
         col_result1, col_result2 = st.columns([2, 1])
         with col_result1:
-            st.image(st.session_state.generated_result, use_column_width=True, caption="Multi-Finger Ring Photo")
+            st.image(st.session_state.generated_result, use_column_width=True, caption="Generated Jewelry Photo")
         
         with col_result2:
             st.markdown("### 💾 Actions")
             st.download_button(
                 "📥 Download Image",
                 st.session_state.generated_result,
-                "multi_finger_rings.jpg",
+                "jewelry_gen.jpg",
                 "image/jpeg",
                 use_container_width=True,
                 type="secondary"
@@ -557,19 +587,16 @@ with tab1:
             st.divider()
             st.markdown("### ☁️ Upload to Shopify")
             
-            # Input for Target Product ID
             target_upload_id = st.text_input("Target Product ID", key="target_upload_id", placeholder="Ex: 8234...", help="ID ของสินค้าปลายทางที่จะเอารูปนี้ไปใส่")
             
             if st.button("⬆️ Generate SEO & Upload", type="primary", use_container_width=True, disabled=not target_upload_id):
                 
-                # 1. Fetch Target Product Info
                 with st.spinner(f"🔍 Fetching details for Product ID: {target_upload_id}..."):
                     t_title, t_handle = get_target_product_details(sh_shop, sh_token, target_upload_id)
                 
                 if not t_title:
-                    st.error("❌ Product ID Not Found in Shopify. Please check the ID.")
+                    st.error("❌ Product ID Not Found in Shopify.")
                 else:
-                    # 2. Generate SEO Data based on TARGET Info
                     with st.spinner(f"🧠 Generating SEO for '{t_title}'..."):
                         seo_data = generate_seo_data(
                             api_key, 
@@ -582,7 +609,6 @@ with tab1:
                         
                         st.info(f"📄 File: `{final_filename}`\n🏷️ Alt: `{final_alt}`")
                     
-                    # 3. Upload to Shopify
                     with st.spinner("☁️ Uploading..."):
                         success, resp = upload_image_to_shopify(
                             sh_shop, sh_token, 
