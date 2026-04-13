@@ -84,7 +84,7 @@ def get_shopify_product_images(shop_url, access_token, product_id):
     if not shop_url.endswith(".myshopify.com"):
         shop_url += ".myshopify.com"
         
-    url = f"https://{shop_url}/admin/api/2024-01/products/{product_id}/images.json"
+    url = f"https://{shop_url}/admin/api/2026-04/products/{product_id}/images.json"
     
     headers = {
         "X-Shopify-Access-Token": access_token,
@@ -118,7 +118,7 @@ def get_target_product_details(shop_url, access_token, product_id):
     shop_url = shop_url.replace("https://", "").replace("http://", "").strip()
     if not shop_url.endswith(".myshopify.com"): shop_url += ".myshopify.com"
     
-    url = f"https://{shop_url}/admin/api/2024-01/products/{product_id}.json?fields=title,handle"
+    url = f"https://{shop_url}/admin/api/2026-04/products/{product_id}.json?fields=title,handle"
     headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
     
     try:
@@ -139,7 +139,7 @@ def upload_image_to_shopify(shop_url, access_token, product_id, image_bytes, fil
     shop_url = shop_url.replace("https://", "").replace("http://", "").strip()
     if not shop_url.endswith(".myshopify.com"): shop_url += ".myshopify.com"
     
-    url = f"https://{shop_url}/admin/api/2024-01/products/{product_id}/images.json"
+    url = f"https://{shop_url}/admin/api/2026-04/products/{product_id}/images.json"
     headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
     
     # Convert bytes to base64 string
