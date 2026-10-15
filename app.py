@@ -42,19 +42,21 @@ if not check_password():
 # - gemini-3-pro-image-preview (ตัวเดิม) ถึงกำหนดปิดตั้งแต่ 2026-06-25 → ตัวแทนคือ gemini-3-pro-image (GA)
 # - gemini-1.5-flash (ตัวเดิมของ SEO) ถูกปิดไปแล้ว → SEO ล้มทุกครั้งแล้วใช้ชื่อไฟล์สำรองเงียบ ๆ
 # max_fidelity_refs = จำนวนรูปอ้างอิงที่โมเดลรักษารายละเอียดได้แม่น (API รับรวมสูงสุด 14 รูป)
+# 2026-10-15 เทสต์จริงกับสินค้าร้าน: 2.1 ใส่แหวนถูกนิ้ว ลายตรง · Pro ใส่ผิดนิ้ว, แต่งข้อความบนแหวน,
+# วาดป้าย A/B/C ลงภาพ และรอบ prompt ใหม่ยังเพิ่มแหวนซ้ำบนนิ้วก้อยเอง → default = 2.1
 IMAGE_MODELS = {
-    "gemini-3-pro-image": {
-        "label": "Nano Banana Pro — สมจริงสุด ลายสลัก/ตัวอักษรแม่นสุด (~$0.134/รูป)",
-        "max_fidelity_refs": 6,
-        "thinking_level": None,  # Pro คิดเองเสมอ ปรับไม่ได้
-    },
     "gemini-nano-banana-2.1": {
-        "label": "Nano Banana 2.1 — ใหม่สุด (ต.ค. 2026) ถูกกว่า ~3-4 เท่า (~$0.05/รูป 2K)",
+        "label": "Nano Banana 2.1 — ใหม่สุด (ต.ค. 2026) แม่นสุดกับสินค้าร้าน (~$0.05/รูป 2K)",
         "max_fidelity_refs": 10,
         "thinking_level": "high",
     },
+    "gemini-3-pro-image": {
+        "label": "Nano Banana Pro — ไม่แนะนำ: มักใส่ผิดนิ้ว/เพิ่มแหวนเอง/แต่งตัวอักษร (~$0.134/รูป)",
+        "max_fidelity_refs": 6,
+        "thinking_level": None,  # Pro คิดเองเสมอ ปรับไม่ได้
+    },
 }
-DEFAULT_IMAGE_MODEL = "gemini-3-pro-image"
+DEFAULT_IMAGE_MODEL = "gemini-nano-banana-2.1"
 MODEL_SEO_GEN = "gemini-3.8-flash"  # For generating SEO text (Fast & Cheap)
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 MAX_REFS_TOTAL = 14       # ลิมิตรูปอ้างอิงต่อ 1 request ของ API
@@ -455,26 +457,32 @@ def generate_seo_data(api_key, image_bytes, product_title, product_handle):
 
 # --- AI FUNCTION: GENERATE FROM SCRATCH ---
 JEWELRY_LOCATIONS = {
-    "index": "INDEX finger (the finger next to the thumb)",
-    "middle": "MIDDLE finger (the longest, centre finger)",
-    "ring": "RING finger (between the middle finger and the little finger)",
-    "little": "LITTLE finger (the pinky, smallest finger)",
-    "bracelet": "WRIST (bracelet)",
-    "necklace": "NECK (necklace / pendant)",
+    "index": "INDEX finger (1st finger counting from the thumb)",
+    "middle": "MIDDLE finger (2nd finger from the thumb, the longest)",
+    "ring": "RING finger (3rd finger from the thumb)",
+    "little": "LITTLE finger (4th finger from the thumb, the pinky)",
+    "bracelet": "WRIST",
+    "necklace": "NECK",
 }
+JEWELRY_NOUNS = {"bracelet": "bracelet", "necklace": "necklace / pendant"}  # ที่เหลือ = ring
 ORDERED_KEYS = ["index", "middle", "ring", "little", "bracelet", "necklace"]
 FINGER_KEYS = ["index", "middle", "ring", "little"]
+NO_TEXT_RULE = ("Add no text of any kind to the picture: no labels, letters, numbers, captions, arrows or watermarks. "
+                "The only lettering allowed is engraving that physically exists on the products.")
+
+def item_title(k):
+    """ป้ายเรียกแต่ละชิ้นด้วยตำแหน่ง ห้ามใช้ตัวอักษร A/B/C — Pro เคยวาด A B C ลงบนภาพจริง"""
+    return f"the {JEWELRY_NOUNS.get(k, 'ring')} for the {JEWELRY_LOCATIONS[k]}"
 
 def build_generation_parts(all_images_dict, base_prompt, hand_model):
     """ประกอบ prompt แบบวางป้ายข้อความคั่นหน้ารูปของแต่ละชิ้น (interleave)
     — แม่นกว่าการแปะรูปทั้งหมดไว้ท้าย prompt แล้วอ้าง 'reference image #5'"""
     used = [k for k in ORDERED_KEYS if all_images_dict.get(k)]
-    letters = "ABCDEF"
     has_necklace = bool(all_images_dict.get("necklace"))
     framing = ("Portrait / bust shot that shows the hand and the neck"
                if has_necklace else "Close-up shot of one hand and the wrist")
     bare = [JEWELRY_LOCATIONS[k].split(" (")[0] for k in FINGER_KEYS if not all_images_dict.get(k)]
-    assignments = "\n".join(f"- PRODUCT {letters[i]} → {JEWELRY_LOCATIONS[k]}" for i, k in enumerate(used))
+    assignments = "\n".join(f"- {item_title(k)[0].upper()}{item_title(k)[1:]}" for k in used)
 
     intro = f"""Create one photorealistic professional jewelry photo of a {hand_model} hand model wearing the exact products shown in the reference photos below.
 
@@ -483,19 +491,19 @@ STYLE / SCENE:
 
 FRAMING: {framing}. Unless the style above says otherwise, show the back of one hand toward the camera, fingers relaxed and slightly apart, so every piece is fully visible and in sharp focus.
 
-PLACEMENT (follow exactly):
+PLACEMENT (follow exactly; count fingers outward from the thumb):
 {assignments}
 """
     parts = [{"text": intro}]
-    for i, k in enumerate(used):
+    for k in used:
         n = len(all_images_dict[k])
-        parts.append({"text": f"PRODUCT {letters[i]} — worn on the {JEWELRY_LOCATIONS[k]}. "
-                              f"{n} reference photo(s) of this single product:"})
+        parts.append({"text": f"Reference photo(s) of {item_title(k)} — {n} photo(s) of this one product:"})
         for img in all_images_dict[k]:
             parts.append(image_part(pil_to_jpeg_bytes(img)))
 
     rules = [
         "Each product appears exactly once, only in its assigned position. Do not swap, mirror or duplicate products.",
+        NO_TEXT_RULE,
         f"These fingers stay bare (no ring): {', '.join(bare)}. No ring on the thumb." if bare else "No ring on the thumb.",
         "No extra jewelry beyond the listed products (no additional rings, bracelets or watches).",
         "Reproduce every product faithfully: same silhouette, proportions, band width, engraved or embossed lettering, "
@@ -523,7 +531,7 @@ def edit_generated_image(api_key, model, current_image_bytes, current_mime, edit
         {"text": f"""Edit the image below. Change ONLY this:
 {edit_instructions}
 
-Keep everything else exactly the same: the hand, pose, skin, lighting, background, camera angle, and every piece of jewelry the instruction does not mention. Keep the professional jewelry photography style and realism. If moving a ring, keep the hand anatomically correct."""},
+Keep everything else exactly the same: the hand, pose, skin, lighting, background, camera angle, and every piece of jewelry the instruction does not mention. Keep the professional jewelry photography style and realism. If moving a ring, keep the hand anatomically correct. {NO_TEXT_RULE}"""},
         image_part(current_image_bytes, current_mime or detect_mime(current_image_bytes)),
     ]
     used = [k for k in ORDERED_KEYS if ref_images_dict and ref_images_dict.get(k)]
